@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Portón SanCarlos</title>
+  <link rel="icon" href="image.png" type="image/png">
+  <meta name="viewport" content="width=device-width, maximum-scale=1.0, user-scalable=no, orientation=portrait">
+  <script src="https://www.gstatic.com/firebasejs/8.6.8/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.6.8/firebase-database.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/fingerprintjs2/2.1.0/fingerprint2.min.js"></script>
+  <style>
+    body {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background-color: #f5f5f5;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+    .container {
+      text-align: center;
+      max-width: 600px;
+      width: 100%;
+      background-color: #ffffff;
+      padding: 20px;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+      border-radius: 10px;
+    }
+    h1 {
+      color: #333;
+      font-size: 24px;
+    }
+    h2 {
+      color: #007bff;
+      margin-bottom: 20px;
+      font-size: 20px;
+    }
+    input, button {
+      margin: 10px 0;
+      padding: 10px;
+      width: calc(100% - 40px);
+      max-width: 500px;
+      box-sizing: border-box;
+      font-size: 16px;
+    }
+    #toggle-button {
+      padding: 15px 30px;
+      font-size: 18px;
+      background-color: #007bff;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: background-color 0.3s;
+    }
+    #toggle-button:disabled {
+      background-color: #b0c4de;
+      cursor: not-allowed;
+    }
+    #toggle-button:hover:not(:disabled) {
+      background-color: #0056b3;
+    }
+    #info-text {
+      margin-top: 20px;
+      color: #ff0000;
+      font-size: 16px;
+      display: none;
+    }
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2 id="condo-name"></h2>
+    <div id="registro-container" class="hidden">
+      <div id="registro">
+        <h1>Registro de Usuario</h1>
+        <input type="text" id="name" placeholder="Nombre" required />
+        <input type="tel" id="phone" placeholder="Número de Teléfono" required />
+        <button id="register-button">Registrar</button>
+      </div>
+    </div>
+    <h1>Control de Portón</h1>
+    <button id="toggle-button" class="hidden" disabled>Abrir Portón</button>
+    <div id="info-text">Por favor, contacte al administrador para que lo habilite.</div>
+  </div>
+  <script>
+    // Configuración de Firebase
+    const firebaseConfig = {
+      apiKey: "AIzaSyCIZdp0gLH_6uY0GUIpb2NsQBjKVQg8XgQ",
+      authDomain: "controlporton-fd7f3.firebaseapp.com",
+      projectId: "controlporton-fd7f3",
+      storageBucket: "controlporton-fd7f3.appspot.com",
+      messagingSenderId: "896592173919",
+      appId: "1:896592173919:web:e93ed1e4b0aacfe17374ea",
+      databaseURL: "https://controlporton-fd7f3-default-rtdb.firebaseio.com/"
+    };
+
+    // Inicializar Firebase
+    firebase.initializeApp(firebaseConfig);
+
+    // Referencia a tu base de datos de Firebase
+    const database = firebase.database();
+
+    // Nombre del condominio
+    const condoName = 'SanCarlos';
+
+    // Mostrar el nombre del condominio en la web
+    document.getElementById('condo-name').textContent = `Condominio: ${condoName}`;
+
+    // Obtener referencia al botón
+    const toggleButton = document.getElementById('toggle-button');
+
+    // Obtener referencias a los elementos de la interfaz de usuario
+    const nameInput = document.getElementById('name');
+    const phoneInput = document.getElementById('phone');
+    const registerButton = document.getElementById('register-button');
+    const infoText = document.getElementById('info-text');
+
+    // Referencia a la base de datos para usuarios y control del portón
+    const usersRef = database.ref(`${condoName}/usuarios`);
+    const gateRef = database.ref(`${condoName}/led1`);
+
+    // Usuario actual (se asignará después de autenticar)
+    let currentUser = null;
+
+    // Temporizador para restablecer el estado del portón
+    let gateTimeout = null;
+
+    // Variable para rastrear si el portón se abrió antes de los 10 segundos
+    let gateOpenedInTime = false;
+
+    // Variable para rastrear si el botón fue presionado
+    let buttonPressed = false;
+
+    // Obtener información del navegador y sistema operativo
+    function getDeviceInfo() {
+      const userAgent = navigator.userAgent;
+      const platform = navigator.platform;
+      const vendor = navigator.vendor;
+      return { userAgent, platform, vendor };
+    }
+
+    // Verificar si el usuario ya está registrado al cargar la página
+    window.addEventListener('load', () => {
+      const deviceInfo = getDeviceInfo();
+      Fingerprint2.get(components => {
+        const values = components.map(component => component.value);
+        const fingerprint = Fingerprint2.x64hash128(values.join(''), 31);
+
+        usersRef.once('value').then(snapshot => {
+          const usuarios = snapshot.val();
+          let userExists = false;
+          if (usuarios) {
+            Object.keys(usuarios).forEach(id => {
+              const usuario = usuarios[id];
+              if (usuario.huella === fingerprint && usuario.dispositivo.userAgent === deviceInfo.userAgent && usuario.dispositivo.platform === deviceInfo.platform && usuario.dispositivo.vendor === deviceInfo.vendor) {
+                currentUser = { id: id, ...usuario }; // Guardar ID de usuario
+                userExists = true;
+                if (usuario.fase) { // Verificación de habilitación del usuario
+                  toggleButton.disabled = false; // Desbloquear botón si el usuario está habilitado
+                  toggleButton.classList.remove('hidden'); // Mostrar el botón
+                } else {
+                  toggleButton.classList.remove('hidden'); // Mostrar el botón aunque esté deshabilitado
+                  // Escuchar cambios en el estado de habilitación del usuario
+                  usersRef.child(id).on('value', (snapshot) => {
+                    const updatedUser = snapshot.val();
+                    if (updatedUser && updatedUser.fase) {
+                      toggleButton.disabled = false; // Habilitar el botón si el usuario es habilitado
+                      infoText.style.display = 'none'; // Ocultar el texto informativo
+                      currentUser = updatedUser; // Actualizar currentUser con la información actualizada
+                      location.reload(); // Refrescar la página
+                    } else if (updatedUser && !updatedUser.fase) {
+                      toggleButton.disabled = true; // Deshabilitar el botón si el usuario es inhabilitado
+                      infoText.style.display = 'block'; // Mostrar el texto informativo
+                      currentUser = updatedUser; // Actualizar currentUser con la información actualizada
+                    }
+                  });
+                }
+              }
+            });
+          }
+
+          if (!userExists) {
+            document.getElementById('registro-container').classList.remove('hidden'); // Mostrar el contenedor de registro
+          }
+        }).catch(error => {
+          console.error('Error al verificar el registro del usuario:', error);
+        });
+      });
+    });
+    // Registrar usuario
+    registerButton.addEventListener('click', () => {
+      const name = nameInput.value;
+      const phone = phoneInput.value;
+      const deviceInfo = getDeviceInfo();
+
+      if (name && phone) {
+        // Obtener huella digital
+        Fingerprint2.get(components => {
+          const values = components.map(component => component.value);
+          const fingerprint = Fingerprint2.x64hash128(values.join(''), 31);
+
+          // Verificar si el usuario ya está registrado
+          usersRef.once('value').then(snapshot => {
+            const usuarios = snapshot.val();
+            let userExists = false;
+            if (usuarios) {
+              Object.keys(usuarios).forEach(id => {
+                const usuario = usuarios[id];
+                if (usuario.huella === fingerprint && usuario.dispositivo.userAgent === deviceInfo.userAgent && usuario.dispositivo.platform === deviceInfo.platform && usuario.dispositivo.vendor === deviceInfo.vendor) {
+                  userExists = true;
+                }
+              });
+            }
+
+            if (userExists) {
+              alert('Usuario ya registrado. No puede registrarse de nuevo.');
+            } else {
+              // Guardar usuario en Firebase
+              const newUserRef = usersRef.push();
+              newUserRef.set({
+                nombre: name,
+                telefono: phone,
+                huella: fingerprint,
+                fase: false, // Usuario no habilitado por defecto
+                dispositivo: deviceInfo, // Guardar información del dispositivo
+                esAdmin: false // Usuario no tiene permisos de administrador por defecto
+              }).then(() => {
+                if (confirm('Usuario registrado con éxito.')) {
+                  document.getElementById('registro-container').classList.add('hidden'); // Ocultar el contenedor de registro
+                  toggleButton.classList.remove('hidden'); // Mostrar el botón
+                  infoText.style.display = 'block'; // Mostrar el texto informativo
+                  // Escuchar cambios en el estado de habilitación del usuario
+                  newUserRef.on('value', (snapshot) => {
+                    const updatedUser = snapshot.val();
+                    if (updatedUser && updatedUser.fase) {
+                      toggleButton.disabled = false; // Habilitar el botón si el usuario es habilitado
+                      infoText.style.display = 'none'; // Ocultar el texto informativo
+                      currentUser = updatedUser; // Actualizar currentUser con la información actualizada
+                      location.reload(); // Refrescar la página
+                    } else if (updatedUser && !updatedUser.fase) {
+                      toggleButton.disabled = true; // Deshabilitar el botón si el usuario es inhabilitado
+                      infoText.style.display = 'block'; // Mostrar el texto informativo
+                      currentUser = updatedUser; // Actualizar currentUser con la información actualizada
+                    }
+                  });
+                }
+              }).catch(error => {
+                console.error('Error al registrar usuario:', error);
+              });
+            }
+          });
+        });
+      } else {
+        alert('Por favor, completa todos los campos');
+      }
+    });
+
+    // Monitorear cambios en la variable de control del portón
+    gateRef.on('value', (snapshot) => {
+      const gateState = snapshot.val();
+      if (buttonPressed) {
+        if (gateState === 0) {
+          clearTimeout(gateTimeout); // Limpiar el temporizador si el portón se abrió a tiempo
+          toggleButton.disabled = false; // Desbloquear botón
+          buttonPressed = false; // Reiniciar el estado del botón
+        } else if (gateState === 1) {
+          toggleButton.disabled = true; // Bloquear botón si gateState es 1
+          gateOpenedInTime = false;
+          // Establecer temporizador para 10 segundos
+          gateTimeout = setTimeout(() => {
+            if (!gateOpenedInTime) {
+              resetGateState();
+              alert('El portón no se abrió a tiempo. Intenta nuevamente.');
+            }
+          }, 10000);
+        }
+      }
+    });
+
+    // Restablecer el estado del portón si no se abre en un tiempo determinado
+    function resetGateState() {
+      gateRef.set(0).then(() => {
+        console.log('Estado del portón restablecido');
+        toggleButton.disabled = false; // Desbloquear el botón
+        buttonPressed = false; // Asegurar que el estado del botón se reinicie
+      }).catch((error) => {
+        console.error('Error al restablecer el estado del portón:', error);
+      });
+    }
+
+    // Toggle de la variable de control del portón cuando se hace clic en el botón
+    toggleButton.addEventListener('click', () => {
+      // Verificar estado de habilitación del usuario antes de permitir el acceso
+      usersRef.child(currentUser.id).once('value').then((snapshot) => {
+        const currentUserData = snapshot.val();
+        if (currentUserData && currentUserData.fase) {
+          toggleButton.disabled = true; // Bloquear botón al hacer clic
+          gateRef.once('value').then((snapshot) => {
+            const currentState = snapshot.val();
+            gateRef.set(currentState === 1 ? 0 : 1).then(() => {
+              console.log('Estado del portón actualizado en Firebase');
+              clearTimeout(gateTimeout); // Limpiar cualquier temporizador anterior
+              gateOpenedInTime = false; // Reiniciar el rastreador
+              buttonPressed = true; // Indicar que el botón fue presionado
+              gateTimeout = setTimeout(() => {
+                if (!gateOpenedInTime) {
+                  resetGateState();
+                  alert('El portón no se abrió a tiempo. Intenta nuevamente.');
+                }
+              }, 10000);
+            }).catch((error) => {
+              console.error('Error al actualizar el estado del portón:', error);
+            });
+          });
+        } else {
+          alert('Usuario no habilitado.');
+        }
+      });
+    });
+  </script>
+</body>
+</html>

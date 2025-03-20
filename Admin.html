@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>SanCarlos Admin</title>
+  <link rel="icon" href="image.png" type="image/png">
+  <script src="https://www.gstatic.com/firebasejs/8.6.8/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.6.8/firebase-database.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/fingerprintjs2/2.1.0/fingerprint2.min.js"></script>
+  <style>
+    body {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background-color: #f5f5f5;
+    }
+    .container {
+      text-align: center;
+      max-width: 600px;
+      width: 100%;
+    }
+    h1, h2 {
+      color: #333;
+    }
+    h2 {
+      color: #007bff;
+      margin-bottom: 20px;
+    }
+    input, button {
+      margin: 10px;
+      padding: 10px;
+    }
+    #user-list, #admin-list {
+      margin-top: 20px;
+      text-align: left;
+    }
+    #user-list div, #admin-list div {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      padding: 10px;
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+    }
+    .user-info {
+      flex-grow: 1;
+    }
+    .toggle-btn {
+      padding: 5px 10px;
+      background-color: #007bff;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: background-color 0.3s;
+    }
+    .toggle-btn:hover {
+      background-color: #0056b3;
+    }
+    .toggle-btn.inactive {
+      background-color: #b0c4de;
+    }
+    #login-container {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Gestión de Usuarios</h1>
+    <h2 id="residence-name"></h2>
+    <div id="login-container">
+      <input type="tel" id="admin-phone" placeholder="Número de Teléfono" required />
+      <button id="admin-login-button">Iniciar Sesión como Administrador</button>
+      <div id="error-message"></div>
+    </div>
+    <h2>Administradores</h2>
+    <div id="admin-list" style="display:none;"></div>
+    <h2>Usuarios</h2>
+    <div id="user-list" style="display:none;"></div>
+  </div>
+  <script>
+    // Configuración de Firebase
+    const firebaseConfig = {
+      apiKey: "AIzaSyCIZdp0gLH_6uY0GUIpb2NsQBjKVQg8XgQ",
+      authDomain: "controlporton-fd7f3.firebaseapp.com",
+      projectId: "controlporton-fd7f3",
+      storageBucket: "controlporton-fd7f3.appspot.com",
+      messagingSenderId: "896592173919",
+      appId: "1:896592173919:web:e93ed1e4b0aacfe17374ea",
+      databaseURL: "https://controlporton-fd7f3-default-rtdb.firebaseio.com/"
+    };
+
+    // Inicializar Firebase
+    firebase.initializeApp(firebaseConfig);
+
+    // Referencia a tu base de datos de Firebase
+    const database = firebase.database();
+
+    // Nombre del condominio
+    const condoName = 'SanCarlos';
+
+    // Mostrar el nombre del condominio en la web
+    document.getElementById('residence-name').textContent = `Condominio: ${condoName}`;
+
+    // Referencia a la base de datos para usuarios
+    const usersRef = database.ref(`${condoName}/usuarios`);
+    const adminList = document.getElementById('admin-list');
+    const userList = document.getElementById('user-list');
+    const loginContainer = document.getElementById('login-container');
+    const adminPhoneInput = document.getElementById('admin-phone');
+    const adminLoginButton = document.getElementById('admin-login-button');
+    const errorMessage = document.getElementById('error-message');
+
+    // Variable para el administrador actual
+    let currentAdminId = null;
+
+    // Obtener información del navegador y sistema operativo
+    function getDeviceInfo() {
+      const userAgent = navigator.userAgent;
+      const platform = navigator.platform;
+      const vendor = navigator.vendor;
+      return { userAgent, platform, vendor };
+    }
+
+    // Función para mostrar usuarios
+    function mostrarUsuarios() {
+      usersRef.on('value', (snapshot) => {
+        adminList.innerHTML = '';
+        userList.innerHTML = '';
+        const usuarios = snapshot.val();
+
+        if (usuarios) {
+          Object.keys(usuarios).forEach(id => {
+            const usuario = usuarios[id];
+            const div = document.createElement('div');
+            const userInfo = document.createElement('div');
+            userInfo.className = 'user-info';
+            userInfo.textContent = `${usuario.nombre} (Tel: ${usuario.telefono})`;
+
+            if (!usuario.esAdmin) { // Si no es administrador, mostrar el botón
+              const toggleBtn = document.createElement('button');
+              toggleBtn.className = `toggle-btn ${usuario.fase ? '' : 'inactive'}`;
+              toggleBtn.textContent = usuario.fase ? 'Inhabilitar' : 'Habilitar';
+              toggleBtn.addEventListener('click', () => {
+                usersRef.child(id).update({ fase: !usuario.fase });
+              });
+              div.appendChild(toggleBtn);
+            }
+
+            div.appendChild(userInfo);
+
+            if (usuario.esAdmin) {
+              adminList.appendChild(div);
+            } else {
+              userList.appendChild(div);
+            }
+          });
+        } else {
+          userList.textContent = 'No hay usuarios registrados.';
+        }
+      });
+    }
+
+    // Función de inicio de sesión como administrador
+    adminLoginButton.addEventListener('click', () => {
+      const adminPhone = adminPhoneInput.value;
+      const deviceInfo = getDeviceInfo();
+
+      if (adminPhone) {
+        usersRef.once('value').then(snapshot => {
+          const usuarios = snapshot.val();
+          if (usuarios) {
+            let isAdmin = false;
+            let adminHabilitado = false;
+            Object.keys(usuarios).forEach(id => {
+              const usuario = usuarios[id];
+              if (usuario.telefono === adminPhone && usuario.esAdmin && usuario.dispositivo.userAgent === deviceInfo.userAgent && usuario.dispositivo.platform === deviceInfo.platform && usuario.dispositivo.vendor === deviceInfo.vendor) {
+                isAdmin = true;
+                adminHabilitado = usuario.fase;
+                currentAdminId = id;
+              }
+            });
+            if (isAdmin && adminHabilitado) {
+              loginContainer.style.display = 'none';
+              adminList.style.display = 'block';
+              userList.style.display = 'block';
+              mostrarUsuarios();
+              verificarHabilitacionAdmin(); // Llamar a la verificación inicial
+            } else if (isAdmin && !adminHabilitado) {
+              errorMessage.textContent = 'El administrador está inhabilitado.';
+            } else {
+              errorMessage.textContent = 'No tienes permisos de administrador o has intentado acceder desde un dispositivo no autorizado.';
+            }
+          } else {
+            errorMessage.textContent = 'No hay usuarios registrados.';
+          }
+        }).catch(error => {
+          console.error('Error al verificar permisos de administrador:', error);
+        });
+      } else {
+        errorMessage.textContent = 'Por favor, completa todos los campos';
+      }
+    });
+
+    // Función para verificar la habilitación del administrador
+    function verificarHabilitacionAdmin() {
+      if (currentAdminId) {
+        usersRef.child(currentAdminId).on('value', (snapshot) => {
+          const adminData = snapshot.val();
+          if (!adminData || !adminData.esAdmin || !adminData.fase) { // Verificar si el usuario sigue siendo administrador y está habilitado
+            deshabilitarAcciones();
+            alert('El administrador ha sido inhabilitado.');
+            window.location.reload();
+          }
+        });
+      }
+    }
+
+    // Función para deshabilitar todas las acciones
+    function deshabilitarAcciones() {
+      const buttons = document.querySelectorAll('button');
+      buttons.forEach(button => {
+        button.disabled = true;
+      });
+
+      document.body.style.pointerEvents = 'none';
+    }
+
+    // Llamar a la función para mostrar usuarios
+    mostrarUsuarios();
+  </script>
+</body>
+</html>
