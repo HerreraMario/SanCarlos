@@ -17,213 +17,286 @@ const database = firebase.database();
 const usersRef = database.ref("SanCarlos/usuarios");
 const gateRef = database.ref("SanCarlos/led1");
 
-// Variables y referencias
+// Variables y referencias de la interfaz
 const condoName = "SanCarlos";
 document.getElementById("condo-name").textContent = condoName;
 const toggleButton = document.getElementById("toggle-button");
 const nameInput = document.getElementById("name");
 const registerButton = document.getElementById("register-button");
 const infoText = document.getElementById("info-text");
-const userNameDisplay = document.getElementById("user-name"); // Mostrará el nombre del usuario registrado
+const userNameDisplay = document.getElementById("user-name"); // Contenedor para el nombre del usuario
+
 let currentUser = null;
 let buttonPressed = false;
 let gateOpenedInTime = false;
 let gateTimeout = null;
 
-// Mostrar el nombre del usuario registrado en la web
-function showUserName(name) {
-  userNameDisplay.textContent = name; // Solo muestra el nombre del usuario
-  userNameDisplay.parentElement.classList.remove("hidden"); // Mostrar el contenedor del nombre
-}
+// Variable para marcar el inicio de la operación
+let operationStartTime = null;
 
-// Al cargar la página, verificar si el nombre en localStorage está en Firebase y compararlo
-window.addEventListener("load", () => {
+/**
+ * Formatea una fecha en formato "DD/MM/YY HH:mm".
+ * @param {Date} date - La fecha a formatear.
+ * @returns {string} La fecha formateada.
+ */
+const formatTimestamp = (date) => {
+  const d = date.getDate().toString().padStart(2, "0");
+  const m = (date.getMonth() + 1).toString().padStart(2, "0");
+  const y = date.getFullYear().toString().slice(-2);
+  const hh = date.getHours().toString().padStart(2, "0");
+  const mm = date.getMinutes().toString().padStart(2, "0");
+  return `${d}/${m}/${y} ${hh}:${mm}`;
+};
+
+/**
+ * Registra la operación efectiva (cuando el portón vuelve a 0 en el tiempo permitido),
+ * guardando la fecha con formato resumido en el nodo "fecha" del usuario.
+ *
+ * Se almacenan los registros numerados del 1 al 8.  
+ * Si hay menos de 8 registros, se añade en la siguiente posición;  
+ * si ya hay 8, se elimina el registro en el índice 1, se desplazan los demás
+ * (2 pasa a ser 1, ... , 8 pasa a ser 7) y se coloca el nuevo registro en la posición 8.
+ * 
+ * @param {string} userName - Nombre del usuario.
+ * @param {Date} fecha - Fecha y hora de la operación efectiva.
+ */
+const recordEffectiveDate = async (userName, fecha) => {
+  try {
+    const formattedDate = formatTimestamp(fecha);
+    const fechaRef = usersRef.child(userName).child("fecha");
+    const snapshot = await fechaRef.once("value");
+    const data = snapshot.val() || {}; // Registros actuales
+    // Convertir las keys a números y ordenarlas
+    let keys = Object.keys(data).map(Number).sort((a, b) => a - b);
+    
+    if (keys.length < 8) {
+      // Añadir en el siguiente índice (empleamos 1-indexado)
+      const newIndex = keys.length + 1;
+      await fechaRef.child(newIndex).set(formattedDate);
+      console.log(`Registro guardado en índice ${newIndex}: ${formattedDate} para el usuario ${userName}`);
+    } else {
+      // Se han alcanzado 8 registros, entonces se elimina el registro 1 y se reindexan
+      for (let i = 2; i <= 8; i++) {
+        await fechaRef.child(i - 1).set(data[i]);
+      }
+      await fechaRef.child(8).set(formattedDate);
+      console.log(`Registro actualizado en índice 8: ${formattedDate} para el usuario ${userName}`);
+    }
+  } catch (error) {
+    console.error("Error al registrar la fecha efectiva:", error);
+  }
+};
+
+/**
+ * Muestra el nombre del usuario en la interfaz.
+ * @param {string} name - El nombre del usuario.
+ */
+const showUserName = (name) => {
+  userNameDisplay.textContent = name;
+  userNameDisplay.parentElement.classList.remove("hidden");
+};
+
+/**
+ * Obtiene los datos del usuario desde Firebase.
+ * @param {string} name - El nombre del usuario.
+ * @returns {Promise<Object|null>} Los datos del usuario o null en caso de error.
+ */
+const getUserData = async (name) => {
+  try {
+    const snapshot = await usersRef.child(name).once("value");
+    return snapshot.val();
+  } catch (error) {
+    console.error("Error al obtener datos del usuario:", error);
+    return null;
+  }
+};
+
+/**
+ * Suscribe la escucha de cambios para el usuario especificado.
+ * @param {string} name - El nombre del usuario.
+ */
+const subscribeUserChanges = (name) => {
+  usersRef.child(name).on("value", (snapshot) => {
+    const updatedUser = snapshot.val();
+    if (updatedUser) {
+      // Agregamos la propiedad "nombre" usando el key
+      currentUser = {...updatedUser, nombre: name};
+      updateUserUI(updatedUser);
+    }
+  });
+};
+
+/**
+ * Actualiza la interfaz de usuario según el estado del usuario.
+ * @param {Object} userData - Datos del usuario.
+ */
+const updateUserUI = (userData) => {
+  if (userData.fase) {
+    toggleButton.disabled = false;
+    toggleButton.classList.remove("hidden");
+    document.getElementById("registro-container").classList.add("hidden");
+    infoText.style.display = "none";
+  } else {
+    toggleButton.disabled = true;
+    infoText.style.display = "block";
+  }
+};
+
+/**
+ * Establece o reinicia el temporizador para comprobar el estado del portón.
+ */
+const setGateTimeout = () => {
+  clearTimeout(gateTimeout);
+  gateOpenedInTime = false;
+  gateTimeout = setTimeout(() => {
+    if (!gateOpenedInTime) {
+      resetGateState();
+      alert("El portón no se abrió a tiempo. Intenta nuevamente.");
+    }
+  }, 10000);
+};
+
+/**
+ * Restablece el estado del portón a 0.
+ */
+const resetGateState = async () => {
+  try {
+    await gateRef.set(0);
+    console.log("Estado del portón restablecido");
+    toggleButton.disabled = false;
+    buttonPressed = false;
+  } catch (error) {
+    console.error("Error al restablecer el estado del portón:", error);
+  }
+};
+
+/**
+ * Al cargar la página, se verifica si hay un usuario almacenado.
+ */
+window.addEventListener("load", async () => {
   const storedName = localStorage.getItem("userName");
   if (storedName) {
-    usersRef.child(storedName).once("value").then(snapshot => {
-      const usuario = snapshot.val();
-      if (usuario) {
-        if (usuario.nombre === storedName) {
-          showUserName(storedName); // Mostrar el nombre en la interfaz
-          checkUserInDatabase(storedName); // Verificar los permisos del usuario en la base de datos
-        } else {
-          console.warn("El nombre almacenado no coincide con el registrado en Firebase. Eliminando...");
-          localStorage.removeItem("userName");
-          document.getElementById("registro-container").classList.remove("hidden"); // Mostrar formulario de registro
-        }
-      } else {
-        console.warn("Nombre no encontrado en Firebase. Eliminando de localStorage...");
-        localStorage.removeItem("userName");
-        document.getElementById("registro-container").classList.remove("hidden"); // Mostrar formulario de registro
-      }
-    }).catch(error => {
-      console.error("Error al verificar el usuario en Firebase:", error);
-    });
+    const usuario = await getUserData(storedName);
+    if (usuario) {
+      // Asignamos el nombre obtenido del key al objeto currentUser
+      currentUser = {...usuario, nombre: storedName};
+      showUserName(storedName);
+      subscribeUserChanges(storedName);
+    } else {
+      console.warn("No existe el usuario en Firebase.");
+      localStorage.removeItem("userName");
+      document.getElementById("registro-container").classList.remove("hidden");
+    }
   } else {
     document.getElementById("registro-container").classList.remove("hidden");
   }
 });
 
-// Detectar eliminación de usuarios en Firebase y recargar la página
-usersRef.on("child_removed", snapshot => {
+/**
+ * Monitoriza la eliminación de usuarios en Firebase.
+ */
+usersRef.on("child_removed", (snapshot) => {
   const removedUser = snapshot.val();
   const storedName = localStorage.getItem("userName");
-
   if (storedName && removedUser && storedName === removedUser.nombre) {
     console.warn(`El usuario ${storedName} ha sido eliminado de Firebase. Recargando página...`);
     localStorage.removeItem("userName");
-    window.location.reload(); // Recargar la página
+    window.location.reload();
   } else {
     console.warn("Un usuario fue eliminado, pero no afecta al actual.");
   }
 });
 
-// Verificar el nombre del usuario en la base de datos
-function checkUserInDatabase(name) {
-  usersRef.child(name).once("value").then(snapshot => {
+/**
+ * Maneja el registro del usuario.
+ */
+registerButton.addEventListener("click", async () => {
+  const name = nameInput.value.trim();
+  if (!name) {
+    alert("Por favor, completa el campo de nombre");
+    return;
+  }
+  try {
+    const snapshot = await usersRef.child(name).once("value");
     const usuario = snapshot.val();
     if (usuario) {
-      currentUser = usuario;
-
-      if (usuario.fase) {
-        toggleButton.disabled = false;
-        toggleButton.classList.remove("hidden");
-        document.getElementById("registro-container").classList.add("hidden"); // Ocultar formulario de registro
-      } else {
-        toggleButton.classList.remove("hidden");
-        usersRef.child(name).on("value", snapshot => {
-          const updatedUser = snapshot.val();
-          if (updatedUser && updatedUser.fase) {
-            toggleButton.disabled = false;
-            toggleButton.classList.remove("hidden");
-            document.getElementById("registro-container").classList.add("hidden");
-            infoText.style.display = "none";
-            currentUser = updatedUser;
-          } else if (updatedUser && !updatedUser.fase) {
-            toggleButton.disabled = true;
-            infoText.style.display = "block";
-            currentUser = updatedUser;
-          }
-        });
-      }
-    } else {
-      document.getElementById("registro-container").classList.remove("hidden");
+      alert("El nombre ya está en uso. Por favor, elija otro nombre.");
+      return;
     }
-  }).catch(error => {
-    console.error("Error al verificar el registro del usuario:", error);
-    document.getElementById("registro-container").classList.remove("hidden");
-  });
-}
-
-// Registrar usuario y almacenar el nombre en localStorage
-registerButton.addEventListener("click", () => {
-  const name = nameInput.value.trim();
-
-  if (name) {
-    usersRef.child(name).once("value").then(snapshot => {
-      const usuario = snapshot.val();
-      if (usuario) {
-        alert("El nombre ya está en uso. Por favor, elija otro nombre.");
-      } else {
-        usersRef.child(name).set({
-          nombre: name,
-          fase: false,
-          esAdmin: false
-        }).then(() => {
-          localStorage.setItem("userName", name);
-          showUserName(name);
-
-          if (confirm("Usuario registrado con éxito.")) {
-            document.getElementById("registro-container").classList.add("hidden");
-            toggleButton.classList.remove("hidden");
-            infoText.style.display = "block";
-
-            usersRef.child(name).on("value", snapshot => {
-              const updatedUser = snapshot.val();
-              if (updatedUser && updatedUser.fase) {
-                toggleButton.disabled = false;
-                toggleButton.classList.remove("hidden");
-                document.getElementById("registro-container").classList.add("hidden");
-                infoText.style.display = "none";
-                currentUser = updatedUser;
-                location.reload();
-              } else if (updatedUser && !updatedUser.fase) {
-                toggleButton.disabled = true;
-                infoText.style.display = "block";
-                currentUser = updatedUser;
-              }
-            });
-          }
-        }).catch(error => {
-          console.error("Error al registrar usuario:", error);
-        });
-      }
+    // Registrar Nuevo usuario sin repetir el nombre en el objeto
+    await usersRef.child(name).set({
+      fase: false,
+      esAdmin: false
     });
-  } else {
-    alert("Por favor, completa el campo de nombre");
+    localStorage.setItem("userName", name);
+    currentUser = {fase: false, esAdmin: false, nombre: name}; // Asigna el nombre localmente
+    showUserName(name);
+    if (confirm("Usuario registrado con éxito.")) {
+      document.getElementById("registro-container").classList.add("hidden");
+      toggleButton.classList.remove("hidden");
+      infoText.style.display = "block";
+      subscribeUserChanges(name);
+    }
+  } catch (error) {
+    console.error("Error al registrar usuario:", error);
   }
 });
 
-// Monitorear cambios en la variable del portón
-gateRef.on("value", snapshot => {
+/**
+ * Monitoriza los cambios en el estado del portón.
+ * Cuando el portón vuelve a 0 tras haberse activado (1),
+ * se verifica que el retorno haya ocurrido dentro de 10 segundos
+ * y se registra la operación efectiva (la fecha se almacena en el nodo "fecha").
+ */
+gateRef.on("value", (snapshot) => {
   const gateState = snapshot.val();
   if (buttonPressed) {
     if (gateState === 0) {
+      if (operationStartTime) {
+        const elapsed = new Date() - operationStartTime;
+        if (elapsed <= 10000) { // Operación efectiva si es en 10 segundos o menos
+          recordEffectiveDate(currentUser.nombre, new Date());
+          console.log(`Operación efectiva registrada para ${currentUser.nombre} a las ${formatTimestamp(new Date())}`);
+        }
+        operationStartTime = null;
+      }
       clearTimeout(gateTimeout);
       toggleButton.disabled = false;
       buttonPressed = false;
     } else if (gateState === 1) {
       toggleButton.disabled = true;
       gateOpenedInTime = false;
-
-      gateTimeout = setTimeout(() => {
-        if (!gateOpenedInTime) {
-          resetGateState();
-          alert("El portón no se abrió a tiempo. Intenta nuevamente.");
-        }
-      }, 10000);
+      setGateTimeout();
     }
   }
 });
 
-// Restablecer el estado del portón
-function resetGateState() {
-  gateRef.set(0).then(() => {
-    console.log("Estado del portón restablecido");
-    toggleButton.disabled = false;
-    buttonPressed = false;
-  }).catch(error => {
-    console.error("Error al restablecer el estado del portón:", error);
-  });
-}
-
-// Cambiar el estado del portón al hacer clic en el botón
-toggleButton.addEventListener("click", () => {
-  usersRef.child(currentUser.nombre).once("value").then(snapshot => {
-    const currentUserData = snapshot.val();
-    if (currentUserData && currentUserData.fase) {
+/**
+ * Maneja el evento al hacer clic en el botón para cambiar el estado del portón.
+ * Se registra el instante inicial para verificar el tiempo de retorno.
+ */
+toggleButton.addEventListener("click", async () => {
+  try {
+    const userSnapshot = await usersRef.child(currentUser.nombre).once("value");
+    const currentUserData = userSnapshot.val();
+    if (currentUserData && currentUserData.fase !== undefined ? currentUserData.fase : true) {
       toggleButton.disabled = true;
-
-      gateRef.once("value").then(snapshot => {
-        const currentState = snapshot.val();
-        gateRef.set(currentState === 1 ? 0 : 1).then(() => {
-          console.log("Estado del portón actualizado en Firebase");
-          clearTimeout(gateTimeout);
-          gateOpenedInTime = false;
-          buttonPressed = true;
-
-          gateTimeout = setTimeout(() => {
-            if (!gateOpenedInTime) {
-              resetGateState();
-              alert("El portón no se abrió a tiempo. Intenta nuevamente.");
-            }
-          }, 10000);
-        }).catch(error => {
-          console.error("Error al actualizar el estado del portón:", error);
-        });
-      });
+      const gateSnapshot = await gateRef.once("value");
+      const currentState = gateSnapshot.val();
+      // Cambiar el estado del portón: si es 1 se pone en 0 y viceversa
+      await gateRef.set(currentState === 1 ? 0 : 1);
+      console.log("Estado del portón actualizado en Firebase");
+      
+      // Registrar el instante de inicio de la operación
+      operationStartTime = new Date();
+      
+      clearTimeout(gateTimeout);
+      buttonPressed = true;
+      setGateTimeout();
     } else {
       alert("Usuario no habilitado.");
     }
-  });
+  } catch (error) {
+    console.error("Error al cambiar el estado del portón:", error);
+  }
 });
